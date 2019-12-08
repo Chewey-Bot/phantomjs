@@ -6,19 +6,17 @@
 
 'use strict'
 
-var requestProgress = require('request-progress')
-var progress = require('progress')
 var extractZip = require('extract-zip')
 var cp = require('child_process')
 var fs = require('fs-extra')
 var helper = require('./lib/phantomjs')
 var kew = require('kew')
 var path = require('path')
-var request = require('request')
 var url = require('url')
 var util = require('./lib/util')
 var which = require('which')
 var os = require('os')
+var https=require('https')
 
 var originalPath = process.env.PATH
 
@@ -201,62 +199,28 @@ function getRequestOptions() {
   return options
 }
 
-function handleRequestError(error) {
-  if (error && error.stack && error.stack.indexOf('SELF_SIGNED_CERT_IN_CHAIN') != -1) {
-      console.error('Error making request, SELF_SIGNED_CERT_IN_CHAIN. ' +
-          'Please read https://github.com/Medium/phantomjs#i-am-behind-a-corporate-proxy-that-uses-self-signed-ssl-certificates-to-intercept-encrypted-traffic')
-      exit(1)
-  } else if (error) {
-    console.error('Error making request.\n' + error.stack + '\n\n' +
-        'Please report this full log at https://github.com/Medium/phantomjs')
-    exit(1)
-  } else {
-    console.error('Something unexpected happened, please report this full ' +
-        'log at https://github.com/Medium/phantomjs')
-    exit(1)
-  }
-}
 
 function requestBinary(requestOptions, filePath) {
   var deferred = kew.defer()
 
   var writePath = filePath + '-download-' + Date.now()
 
-  console.log('Receiving...')
-  var bar = null
-  requestProgress(request(requestOptions, function (error, response, body) {
-    console.log('')
-    if (!error && response.statusCode === 200) {
-      fs.writeFileSync(writePath, body)
-      console.log('Received ' + Math.floor(body.length / 1024) + 'K total.')
-      fs.renameSync(writePath, filePath)
-      deferred.resolve(filePath)
+  console.log('Receiving phantom prebuilt...')
 
-    } else if (response) {
-      console.error('Error requesting archive.\n' +
-          'Status: ' + response.statusCode + '\n' +
-          'Request options: ' + JSON.stringify(requestOptions, null, 2) + '\n' +
-          'Response headers: ' + JSON.stringify(response.headers, null, 2) + '\n' +
-          'Make sure your network and proxy settings are correct.\n\n' +
-          'If you continue to have issues, please report this full log at ' +
-          'https://github.com/Medium/phantomjs')
-      exit(1)
-    } else {
-      handleRequestError(error)
-    }
-  })).on('progress', function (state) {
-    try {
-      if (!bar) {
-        bar = new progress('  [:bar] :percent', {total: state.size.total, width: 40})
-      }
-      bar.curr = state.size.transferred
-      bar.tick()
-    } catch (e) {
-      // It doesn't really matter if the progress bar doesn't update.
-    }
+  var file = fs.createWriteStream(writePath)
+  https.get(requestOptions.uri, function (response) {
+    response.pipe(file)
+    file.on('finish', function () {
+      file.close(function(){
+        fs.renameSync(writePath, filePath)
+        console.log('Received whole file')
+        deferred.resolve(filePath)
+      }) // close() is async, call cb after close completes.
+    })
+  }).on('error', function (err) { // Handle errors
+    fs.unlink(writePath) // Delete the file async. (But we don't check the result)
+    console.error(err)
   })
-  .on('error', handleRequestError)
-
   return deferred.promise
 }
 
