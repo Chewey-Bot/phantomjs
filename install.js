@@ -207,21 +207,43 @@ function requestBinary(requestOptions, filePath) {
 
   console.log('Receiving phantom prebuilt...')
 
-  var file = fs.createWriteStream(writePath)
-  https.get(requestOptions.uri, function (response) {
-    response.pipe(file)
-    file.on('finish', function () {
-      file.close(function(){
+  getFile(requestOptions.uri, writePath,function(){
         fs.renameSync(writePath, filePath)
         console.log('Received whole file')
         deferred.resolve(filePath)
-      }) // close() is async, call cb after close completes.
-    })
-  }).on('error', function (err) { // Handle errors
-    fs.unlink(writePath) // Delete the file async. (But we don't check the result)
-    console.error(err)
   })
   return deferred.promise
+}
+
+
+// https://stackoverflow.com/questions/3828888/download-tar-file-via-nodejs/11700113#11700113
+function getFile(url, path, cb) {
+  var http_or_https = https
+  http_or_https.get(url, function (response) {
+      switch (response.statusCode) {
+        case 200:
+          var file = fs.createWriteStream(path)
+          response.on('data', function (chunk) {
+            file.write(chunk)
+          }).on('end', function () {
+            file.end()
+            cb(null)
+          })
+          break
+        case 301:
+        case 302:
+        case 303:
+        case 307:
+          getFile(response.headers.location, path, cb)
+          break
+        default:
+          cb(new Error('Server responded with status code ' + response.statusCode))
+      }
+
+    })
+    .on('error', function (err) {
+      cb(err)
+    })
 }
 
 
